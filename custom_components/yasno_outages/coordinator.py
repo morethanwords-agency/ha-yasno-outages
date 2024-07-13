@@ -102,7 +102,7 @@ class YasnoOutagesCoordinator(DataUpdateCoordinator):
 
     @property
     def next_possible_outage(self) -> datetime.datetime | None:
-        """Get the next outage time."""
+        """Get the next possible outage time."""
         next_events = self.get_next_events()
         for event in next_events:
             if self._event_to_state(event) == STATE_MAYBE:
@@ -114,11 +114,9 @@ class YasnoOutagesCoordinator(DataUpdateCoordinator):
         """Get next connectivity time."""
         now = dt_utils.now()
         current_event = self.get_event_at(now)
-        # If current event is maybe, return the end time
-        if self._event_to_state(current_event) == STATE_MAYBE:
+        if current_event and self._event_to_state(current_event) == STATE_MAYBE:
             return current_event.end
 
-        # Otherwise, return the next maybe event's end
         next_events = self.get_next_events()
         for event in next_events:
             if self._event_to_state(event) == STATE_MAYBE:
@@ -134,7 +132,8 @@ class YasnoOutagesCoordinator(DataUpdateCoordinator):
 
     def get_event_at(self, at: datetime.datetime) -> CalendarEvent:
         """Get the current event."""
-        event = self.api.get_current_event(at)
+        local_time = self.convert_to_local_time(at)
+        event = self.api.get_current_event(local_time)
         return self._get_calendar_event(event, translate=False)
 
     def get_events_between(
@@ -145,18 +144,26 @@ class YasnoOutagesCoordinator(DataUpdateCoordinator):
         translate: bool = True,
     ) -> list[CalendarEvent]:
         """Get all events."""
-        events = self.api.get_events(start_date, end_date)
+        local_start_date = self.convert_to_local_time(start_date)
+        local_end_date = self.convert_to_local_time(end_date)
+        events = self.api.get_events(local_start_date, local_end_date)
         return [
             self._get_calendar_event(event, translate=translate) for event in events
         ]
 
-    def get_next_events(self) -> CalendarEvent:
-        """Get the next event of a specific type."""
+    def get_next_events(self) -> list[CalendarEvent]:
+        """Get the next events."""
         now = dt_utils.now()
-        current_event = self.get_event_at(now)
-        start = current_event.end if current_event else now
+        local_time = self.convert_to_local_time(now)
+        current_event = self.get_event_at(local_time)
+        start = current_event.end if current_event else local_time
         end = start + datetime.timedelta(days=1)
         return self.get_events_between(start, end, translate=False)
+
+    def convert_to_local_time(self, utc_time: datetime.datetime) -> datetime.datetime:
+        """Convert UTC time to local time."""
+        local_tz = dt_utils.DEFAULT_TIME_ZONE
+        return utc_time.replace(tzinfo=datetime.timezone.utc).astimezone(local_tz)
 
     def _get_calendar_event(
         self,
@@ -188,6 +195,7 @@ class YasnoOutagesCoordinator(DataUpdateCoordinator):
         )
 
     def _event_to_state(self, event: CalendarEvent | None) -> str:
+        """Convert event to state."""
         summary = event.as_dict().get("summary") if event else None
         return {
             STATE_OFF: STATE_OFF,
